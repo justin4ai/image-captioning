@@ -1,0 +1,5 @@
+pretrained/
+*.pth
+__pycache__
+CV/datasets/
+*.zip
