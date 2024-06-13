@@ -3,3 +3,4 @@ pretrained/
 __pycache__
 CV/datasets/
 *.zip
+.DS_Store

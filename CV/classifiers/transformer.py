@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 
 from ..transformer_layers import *
-from rotary_embedding_torch import RotaryEmbedding
 
 
 class CaptioningTransformer(nn.Module):
@@ -39,17 +38,17 @@ class CaptioningTransformer(nn.Module):
         self._start = word_to_idx.get("<START>", None)
         self._end = word_to_idx.get("<END>", None)
 
+        # self.attn_map = None
+
         self.visual_projection = nn.Linear(input_dim, wordvec_dim)
         self.embedding = nn.Embedding(vocab_size, wordvec_dim, padding_idx=self._null)
         self.positional_encoding = PositionalEncoding(wordvec_dim, max_len=max_length)
 
-
         decoder_layer = TransformerDecoderLayer(input_dim=wordvec_dim, num_heads=num_heads)
-        self.transformer = TransformerDecoder(decoder_layer, num_layers=num_layers)
+        self.transformer = TransformerDecoder(decoder_layer, num_layers=num_layers).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
         self.apply(self._init_weights)
 
         self.output = nn.Linear(wordvec_dim, vocab_size)
-
 
     def _init_weights(self, module):
         """
@@ -94,18 +93,17 @@ class CaptioningTransformer(nn.Module):
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
 
-        caption_embeddings = self.embedding(captions)
-        caption_embeddings = self.positional_encoding(caption_embeddings)
+        embeddings = self.embedding(captions).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
+        embeddings = self.positional_encoding(embeddings).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
 
-        projected_features = self.visual_projection(features).unsqueeze(1)
-
-        # tgt_mask = torch.tril(T, T)
-        tgt_mask = torch.tril(torch.ones(T, T,
-                                         device = caption_embeddings.device,
-                                         dtype = caption_embeddings.dtype))
+        features = self.visual_projection(features).unsqueeze(1).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
 
 
-        features = self.transformer(caption_embeddings, projected_features, tgt_mask)
+        # following the hint
+        tgt_mask = torch.tril(torch.ones(T, T)).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
+
+ 
+        features, attn = self.transformer(embeddings, features, tgt_mask)
         scores = self.output(features)
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -113,9 +111,9 @@ class CaptioningTransformer(nn.Module):
         #                             END OF YOUR CODE                             #
         ############################################################################
 
-        return scores
+        return scores, attn
 
-    #def sample(self, features, max_length=30):
+    def sample(self, features, max_length=30):
         """
         Given image features, use greedy decoding to predict the image caption.
 
@@ -126,76 +124,36 @@ class CaptioningTransformer(nn.Module):
         Returns:
          - captions: captions for each example, of shape (N, max_length)
         """
-        # with torch.no_grad():
-        #     features = torch.Tensor(features)
-        #     N = features.shape[0]
-
-        #     # Create an empty captions tensor (where all tokens are NULL).
-        #     captions = self._null * np.ones((N, max_length), dtype=np.int32)
-
-        #     # Create a partial caption, with only the start token.
-        #     partial_caption = self._start * np.ones(N, dtype=np.int32)
-        #     partial_caption = torch.LongTensor(partial_caption)
-        #     # [N] -> [N, 1]
-        #     partial_caption = partial_caption.unsqueeze(1)
-
-        #     for t in range(max_length):
-
-        #         # Predict the next token (ignoring all other time steps).
-        #         output_logits = self.forward(features, partial_caption)
-        #         output_logits = output_logits[:, -1, :]
-
-        #         # Choose the most likely word ID from the vocabulary.
-        #         # [N, V] -> [N]
-        #         word = torch.argmax(output_logits, axis=1)
-
-        #         # Update our overall caption and our current partial caption.
-        #         captions[:, t] = word.numpy()
-        #         word = word.unsqueeze(1)
-        #         partial_caption = torch.cat([partial_caption, word], dim=1)
-
-        #     return captions
-
-
-    def sample(self, features, partial_caption = None, max_length=30):
         with torch.no_grad():
             features = torch.Tensor(features)
             N = features.shape[0]
 
- 
-            if partial_caption is None:
+            # Create an empty captions tensor (where all tokens are NULL).
+            captions = self._null * np.ones((N, max_length), dtype=np.int32)
 
-                # Create an empty captions tensor (where all tokens are NULL).
-                captions = self._null * np.ones((N, max_length), dtype=np.int32)
+            # Create a partial caption, with only the start token.
+            partial_caption = self._start * np.ones(N, dtype=np.int32)
+            partial_caption = torch.LongTensor(partial_caption)
+            # [N] -> [N, 1]
+            partial_caption = partial_caption.unsqueeze(1)
 
-                # Create a partial caption, with only the start token.
-                partial_caption = self._start * np.ones(N, dtype=np.int32)
-                partial_caption = torch.LongTensor(partial_caption).unsqueeze(1)
+            for t in range(max_length):
 
-                for t in range(max_length):
-                    # Predict the next token (ignoring all other time steps).
-                    output_logits = self.forward(features, partial_caption)
-                    output_logits = output_logits[:, -1, :]
+                # Predict the next token (ignoring all other time steps).
+                output_logits, attn = self.forward(features, partial_caption)
+                output_logits = output_logits[:, -1, :]
 
-                    print(output_logits.size())
-                    # Choose the most likely word ID from the vocabulary.
-                    
-                    word = torch.argmax(output_logits, axis=1) 
+                # Choose the most likely word ID from the vocabulary.
+                # [N, V] -> [N]
+                word = torch.argmax(output_logits, axis=1)
 
-                    # Update our overall caption and our current partial caption.
-                    captions[:, t] = word.numpy()
-                    word = word.unsqueeze(1)
-                    partial_caption = torch.cat([partial_caption, word], dim=1)
-
-                return captions
-            else:
-
-                # Use partial caption to predict the next token
-                output_logits = self.forward(features, partial_caption)
-                output_logits = output_logits[:, -1, :]  # Get the logits for the last word
-                print(output_logits.size())
-
-                return output_logits
+                # Update our overall caption and our current partial caption.
+                captions[:, t] = word.numpy()
+                word = word.unsqueeze(1)
+                partial_caption = torch.cat([partial_caption, word], dim=1)
+            # print("attention map!")
+            # print(self.attn_map)
+            return captions, attn
 
 
 class TransformerDecoderLayer(nn.Module):
@@ -213,8 +171,6 @@ class TransformerDecoderLayer(nn.Module):
          - dropout: The dropout value.
         """
         super().__init__()
-        self.rotary_emb = RotaryEmbedding(dim = 32)
-
         self.self_attn = MultiHeadAttention(input_dim, num_heads, dropout)
         self.multihead_attn = MultiHeadAttention(input_dim, num_heads, dropout)
         self.linear1 = nn.Linear(input_dim, dim_feedforward)
@@ -230,6 +186,8 @@ class TransformerDecoderLayer(nn.Module):
 
         self.activation = nn.ReLU()
 
+        # self.attn_map = None
+
 
     def forward(self, tgt, memory, tgt_mask=None):
         """
@@ -243,26 +201,26 @@ class TransformerDecoderLayer(nn.Module):
         Returns:
         - out: the Transformer features, of shape (N, T, W)
         """
-        # Perform self-attention on the target sequence (along with dropout and
-        # layer norm).
 
-#        tgt2 = self.self_attn(query=self.rotary_emb.rotate_queries_or_keys(tgt), key=self.rotary_emb.rotate_queries_or_keys(tgt), value=tgt, attn_mask=tgt_mask)
-        tgt2, weight_self = self.self_attn(query=tgt, key=tgt, value=tgt, attn_mask=tgt_mask) # weight output added)
-        tgt = tgt + self.dropout1(tgt2)
+        tgt_out, attn = self.self_attn(query=tgt, key=tgt, value=tgt, attn_mask=tgt_mask)
+        tgt_out = self.dropout1(tgt_out)
+        tgt = tgt + tgt_out # skip connection
         tgt = self.norm1(tgt)
 
-        # Attend to both the target sequence and the sequence from the last
-        # encoder layer.
-        #tgt2 = self.multihead_attn(query=self.rotary_emb.rotate_queries_or_keys(tgt), key=self.rotary_emb.rotate_queries_or_keys(memory), value=memory)
-        tgt2, weight_cross = self.multihead_attn(query=tgt, key=memory, value=memory) # weight output added   
-        tgt = tgt + self.dropout2(tgt2)
+
+        tgt_out2, attn_cross = self.multihead_attn(query=tgt, key=memory, value=memory)
+        tgt_out2 = self.dropout2(tgt_out2)
+        tgt = tgt + tgt_out2
         tgt = self.norm2(tgt)
 
-        # # Pass
-        tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
-        tgt = tgt + self.dropout3(tgt2)
+
+        tgt_out3 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
+        tgt_out3 = self.dropout3(tgt_out3)
+        tgt = tgt + tgt_out3
         tgt = self.norm3(tgt)
-        return tgt
+
+        
+        return tgt, attn
 
 def clones(module, N):
     "Produce N identical layers."
@@ -273,11 +231,13 @@ class TransformerDecoder(nn.Module):
         super().__init__()
         self.layers = clones(decoder_layer, num_layers)
         self.num_layers = num_layers
+        # self.attn_map = None
 
     def forward(self, tgt, memory, tgt_mask=None):
         output = tgt
 
         for mod in self.layers:
-            output = mod(output, memory, tgt_mask=tgt_mask)
+            output, attn = mod(output, memory, tgt_mask=tgt_mask)
+            # self.attn_map = mod.attn_map
 
-        return output
+        return output, attn

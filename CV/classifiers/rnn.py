@@ -1,3 +1,4 @@
+
 import numpy as np
 
 from ..rnn_layers import *
@@ -172,21 +173,21 @@ class CaptioningRNN:
       
         (loss, dscores) = temporal_softmax_loss(scores, captions_out, mask)
 
+
         # Backward pass
-        (dh, dw, db) = temporal_affine_backward(dscores, cache_tmp)
-        grads["W_vocab"], grads["b_vocab"] = dw, db
+        (dh, dw, db_1) = temporal_affine_backward(dscores, cache_tmp)
+        grads["W_vocab"], grads["b_vocab"] = dw, db_1
 
-        if self.cell_type == 'rnn':
-            (dx, dh0, dWx, dWh, db) = rnn_backward(dh, cache_rnn)
-        else:
-            (dx, dh0, dWx, dWh, db) = lstm_backward(dh, cache_rnn)
+        (dx, dh0, dWx, dWh, db_2) = rnn_backward(dh, cache_rnn) if self.cell_type == 'rnn' else lstm_backward(dh, cache_rnn)
+        grads["Wx"], grads["Wh"], grads["b"] = dWx, dWh, db_2
 
-        grads["Wx"], grads["Wh"], grads["b"] = dWx, dWh, db
+        dW = word_embedding_backward(dx, cache_emb)
+        grads["W_embed"] = dW
         
-        grads["W_embed"] = word_embedding_backward(dx, cache_emb)
+        (dx, dw, db_3) = affine_backward(dh0, cache_affine)
+        grads["W_proj"], grads["b_proj"] = dw, db_3
 
-        (dx, dw, db) = affine_backward(dh0, cache_affine)
-        _, grads["W_proj"], grads["b_proj"] = dx, dw, db
+
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
@@ -265,21 +266,48 @@ class CaptioningRNN:
         # (4) Select the word with the highest score as the next word, writing it #
         #     (the word index) to the appropriate slot in the captions variable   #
 
-        h = features.dot(W_proj) + b_proj
-        c = np.zeros(h.shape)
-        V, W = W_embed.shape
-        x = np.ones((N, W)) * W_embed[self._start]
+        # h = features @ (W_proj.T) + b_proj
+        # c = np.zeros_like(h)
+        # x = np.ones_like(W_embed) * W_embed[self._start] # initial embedding of x
+
+        # for t in range(max_length):
+
+        #     if self.cell_type == "rnn":
+        #        h_next, _ = rnn_step_forward(x, h, Wx, Wh, b)
+
+        #     else:
+        #        h_next, c_next, _ = lstm_step_forward(x, h, c, Wx, Wh, b)
+        #        c = c_next
+
+        #     score = h_next @ W_vocab + b_vocab
+        #     word = score.argmax(axis=1)
+
+        #     captions[ : , t] = word # put into caption slot
+        #     x = W_embed[captions[:, t]] # get word embedding of new input x
+
+        #     h = h_next  
+
+        h = features @ W_proj + b_proj
+        c = np.zeros_like(h)
+        start_token = W_embed[self._start]
+        x = np.ones((N, W_embed.shape[1])) * start_token
 
         for t in range(max_length):
+
             if self.cell_type == "rnn":
+
                next_h, _ = rnn_step_forward(x, h, Wx, Wh, b)
             else:
                next_h, next_c, _ = lstm_step_forward(x, h, c, Wx, Wh, b)
                c = next_c
-            out = next_h.dot(W_vocab) + b_vocab
-            captions[:, t] = out.argmax(axis=1)
-            x = W_embed[captions[:, t]] # or W_embed[captions[:, t], :]
-            h = next_h     
+
+            score = next_h @ W_vocab + b_vocab
+            word = score.argmax(axis=1)
+            captions[:, t] = word # into slot
+
+            x = W_embed[captions[ : , t]] # word embedding (new x)
+            h = next_h   
+
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################

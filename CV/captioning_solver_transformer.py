@@ -5,9 +5,6 @@ from .coco_utils import sample_coco_minibatch, decode_captions
 
 import torch
 
-import torch.optim as optim
-import torch.optim.lr_scheduler as lr_scheduler
-
 
 class CaptioningSolverTransformer(object):
     """
@@ -49,7 +46,7 @@ class CaptioningSolverTransformer(object):
         names to gradients of the loss with respect to those parameters.
     """
 
-    def __init__(self, model, data, idx_to_word, gpu = False, **kwargs):
+    def __init__(self, model, data, idx_to_word, **kwargs):
         """
         Construct a new CaptioningSolver instance.
 
@@ -73,16 +70,12 @@ class CaptioningSolverTransformer(object):
 
         # Unpack keyword arguments
         self.learning_rate = kwargs.pop("learning_rate", 0.001)
-        self.optim = optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        self.scheduler = lr_scheduler.StepLR(self.optim, step_size=15, gamma=0.05)
-
-
         self.batch_size = kwargs.pop("batch_size", 100)
         self.num_epochs = kwargs.pop("num_epochs", 10)
 
         self.print_every = kwargs.pop("print_every", 10)
         self.verbose = kwargs.pop("verbose", True)
-        #self.optim = torch.optim.Adam(self.model.parameters(), self.learning_rate)
+        self.optim = torch.optim.Adam(self.model.parameters(), self.learning_rate)
 
         # Throw an error if there are extra keyword arguments
         if len(kwargs) > 0:
@@ -92,11 +85,6 @@ class CaptioningSolverTransformer(object):
         self._reset()
 
         self.idx_to_word = idx_to_word
-        self.epoch = 0
-        self.gpu = gpu
-        self.device = torch.device("cpu") if self.gpu == False else torch.device("cuda:0")
-
-        self.model.to(self.device)
 
     def _reset(self):
         """
@@ -106,72 +94,116 @@ class CaptioningSolverTransformer(object):
         # Set up some variables for book-keeping
         self.epoch = 0
         self.loss_history = []
+        self.val_loss_history = []
 
 
-    def _step(self):
-        """
-        Make a single gradient update. This is called by train() and should not
-        be called manually.
-        """
-        # Make a minibatch of training data
+    # def _step(self):
+    #     """
+    #     Make a single gradient update. This is called by train() and should not
+    #     be called manually.
+    #     """
+    #     # Make a minibatch of training data
+ 
+    #     minibatch = sample_coco_minibatch(
+    #         self.data, batch_size=self.batch_size, split="train"
+    #     )
+    #     captions, features, urls = minibatch
+
+    #     captions_in = captions[:, :-1]
+    #     captions_out = captions[:, 1:]
+
+    #     mask = captions_out != self.model._null
+
+    #     t_features = torch.Tensor(features).to(torch.device("cuda:0"))
+    #     t_captions_in = torch.LongTensor(captions_in).to(torch.device("cuda:0"))
+    #     t_captions_out = torch.LongTensor(captions_out).to(torch.device("cuda:0"))
+    #     t_mask = torch.LongTensor(mask).to(torch.device("cuda:0"))
+    #     logits = self.model(t_features, t_captions_in)
+
+    #     loss = self.transformer_temporal_softmax_loss(logits, t_captions_out, t_mask).to(torch.device("cpu"))
+    #     self.loss_history.append(loss.detach().numpy())
+    #     self.optim.zero_grad()
+    #     loss.backward()
+    #     self.optim.step()
+
+    # def train(self):
+    #     """
+    #     Run optimization to train the model.
+    #     """
+    #     num_train = self.data["train_captions"].shape[0]
+    #     iterations_per_epoch = max(num_train // self.batch_size, 1)
+    #     num_iterations = self.num_epochs * iterations_per_epoch
+
+    #     for t in range(num_iterations):
+    #         self._step()
+
+    #         # Maybe print training loss
+    #         if self.verbose and t % self.print_every == 0:
+    #             print(
+    #                 "(Iteration %d / %d) loss: %f"
+    #                 % (t + 1, num_iterations, self.loss_history[-1])
+    #             )
+
+    #         # At the end of every epoch, increment the epoch counter.
+    #         epoch_end = (t + 1) % iterations_per_epoch == 0
+
+
+    def _step(self, split):
         minibatch = sample_coco_minibatch(
-            self.data, batch_size=self.batch_size, split="train"
+            self.data, batch_size=self.batch_size, split=split
         )
         captions, features, urls = minibatch
 
         captions_in = captions[:, :-1]
         captions_out = captions[:, 1:]
-
         mask = captions_out != self.model._null
 
-        t_features = torch.Tensor(features)
-        t_captions_in = torch.LongTensor(captions_in)
-        t_captions_out = torch.LongTensor(captions_out)
-        t_mask = torch.LongTensor(mask)
+        t_features = torch.Tensor(features).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
+        t_captions_in = torch.LongTensor(captions_in).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
+        t_captions_out = torch.LongTensor(captions_out).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
+        t_mask = torch.LongTensor(mask).to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
+        logits, attn = self.model(t_features, t_captions_in)
 
-        logits = self.model(t_features.to(self.device), t_captions_in.to(self.device))
+        loss = self.transformer_temporal_softmax_loss(logits, t_captions_out, t_mask).to(torch.device("cpu"))
 
-
-
-        loss = self.transformer_temporal_softmax_loss(logits.to(torch.device("cpu")), t_captions_out, t_mask)
-
-        self.loss_history.append(loss.detach().numpy())
-
-        self.optim.zero_grad()
-        loss.backward()
-        self.optim.step()
-
-
+        if split == 'train':
+            self.loss_history.append(loss.detach().numpy())
+            self.optim.zero_grad()
+            loss.backward()
+            self.optim.step()
+        elif split == 'val':
+            self.val_loss_history.append(loss.detach().numpy())
 
     def train(self):
-        """
-        Run optimization to train the model.
-        """
         num_train = self.data["train_captions"].shape[0]
         iterations_per_epoch = max(num_train // self.batch_size, 1)
         num_iterations = self.num_epochs * iterations_per_epoch
 
         for t in range(num_iterations):
-            self._step()
+            self._step(split='train')
 
-            # Maybe print training loss
             if self.verbose and t % self.print_every == 0:
                 print(
                     "(Iteration %d / %d) loss: %f"
                     % (t + 1, num_iterations, self.loss_history[-1])
                 )
 
-            # At the end of every epoch, increment the epoch counter.
-            epoch_end = (t + 1) % iterations_per_epoch == 0
-            
-            if epoch_end:
-              self.epoch += 1
-              self.scheduler.step()
 
-              if self.gpu == True:
-                self.save_checkpoint(self.epoch)
-    
-    def save_checkpoint(self, epoch, file_path='/home/justin/workspace/cv/hw3/CV/latest.pth'):
+            epoch_end = (t + 1) % iterations_per_epoch == 0
+
+
+            if epoch_end:
+                # Compute validation loss at the end of each epoch
+                # self._step(split='val')
+                # avg_val_loss = np.mean(self.val_loss_history[-iterations_per_epoch:])
+                # print(
+                #     "(Epoch %d / %d) validation loss: %f"
+                #     % (self.epoch + 1, self.num_epochs, avg_val_loss)
+                # )
+                self.epoch += 1
+                #self.save_checkpoint(self.epoch)
+
+    def save_checkpoint(self, epoch):
       """
       Save the model and optimizer state to a file.
       """
@@ -181,11 +213,9 @@ class CaptioningSolverTransformer(object):
           'optimizer_state_dict': self.optim.state_dict(),
           'loss_history': self.loss_history,
       }
-      torch.save(state, file_path)
+      torch.save(state, f'./{epoch}.pth')
       if self.verbose:
           print(f"Checkpoint saved at epoch {epoch}")
-
-        
 
     def transformer_temporal_softmax_loss(self, x, y, mask):
         """

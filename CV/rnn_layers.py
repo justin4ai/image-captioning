@@ -1,3 +1,4 @@
+
 """This file defines layer types that are commonly used for recurrent neural networks.
 """
 
@@ -417,11 +418,11 @@ def lstm_step_backward(dnext_h, dnext_c, cache):
 
     da = np.concatenate((da_i, da_f, da_o, da_g), axis = 1)
     
-    dx = da.dot(Wx.T)
-    dprev_h = da.dot(Wh.T)
-    db = np.sum(da, axis=0)
-    dWx = (x.T).dot(da)
-    dWh = (prev_h.T).dot(da)    
+    dx = da @ (Wx.T)
+    dprev_h = da @ (Wh.T)
+    db = np.sum(da, axis = 0)
+    dWx = (x.T) @ da
+    dWh = (prev_h.T) @ da    
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ##############################################################################
@@ -460,16 +461,21 @@ def lstm_forward(x, h0, Wx, Wh, b):
     #############################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    N, T, D = x.shape
-    H = Wh.shape[0]
+    (N, T, D), H = (x.shape), Wh.shape[0]
+
     h = np.zeros((N, T, H))
-    forward_cache = {}
+
+    cache_steps = []
     prev_c = np.zeros_like(h0)
 
     for t in range(T):
-        h[:, t, :], c, forward_cache[t] = lstm_step_forward(x[:, t, :], h[:, t - 1, :], c , Wx, Wh, b) if t != 0 else lstm_step_forward(x[:, t, :], h0, prev_c, Wx, Wh, b)
 
-    cache = (h0, forward_cache, D)
+        x_t = x[:, t, :] 
+        h_prev = h[:, t - 1, :]
+        h[:, t, :], c, cache_step = lstm_step_forward(x_t, h_prev, c , Wx, Wh, b) if t != 0 else lstm_step_forward(x_t, h0, prev_c, Wx, Wh, b)
+        cache_steps.append(cache_step)
+
+    cache = (h0, D, cache_steps)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ##############################################################################
@@ -500,22 +506,28 @@ def lstm_backward(dh, cache):
     #############################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    N, T, H = dh.shape
-    h0, forward_cache, D = cache
-    dx = np.zeros((N, T, D))
-    dWx = np.zeros((D, 4 * H))
-    dWh = np.zeros((H, 4 * H))
-    db = np.zeros((4 * H))
+    (N, T, H) , (h0, D, cache_steps) = dh.shape, cache
+    HH = 4 * H
+
+    dx = np.zeros((N, T, D)) # T for stacking again
+    dWx = np.zeros((D, HH))
+    dWh = np.zeros((H, HH))
+    db = np.zeros((HH))
 
     dprev_h = np.zeros((N, H))
     dprev_c = np.zeros((N, H))
-    for t in reversed(range(T)): # or range(T-1, -1, -1)
-        dh_ag = dh[:, t, :] + dprev_h
-        dx_step, dprev_h, dprev_c, dWx_step, dWh_step, db_step = lstm_step_backward(dh_ag, dprev_c, forward_cache[t])
-        dWx += dWx_step
-        dWh += dWh_step
+
+    reversed_timespace = range(T)[::-1]
+
+    for t in reversed_timespace:
+        dh_cumulative = dh[:, t, :] + dprev_h
+        dx_step, dprev_h, dprev_c, dWx_step, dWh_step, db_step = lstm_step_backward(dh_cumulative, dprev_c, cache_steps[t])
+
+        dx[:, t, :] = dx_step # So I stack again!
+
+        dWx = np.add(dWx, dWx_step)
+        dWh = np.add(dWh, dWh_step)
         db += db_step
-        dx[:, t, :] = dx_step
 
     dh0 = dprev_h
 

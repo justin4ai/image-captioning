@@ -47,6 +47,8 @@ class PositionalEncoding(nn.Module):
 
 
         pe[0, :, 0 :: 2],  pe[0, :, 1 :: 2] = torch.sin(pos * t), torch.cos(pos * t)
+        
+        
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
@@ -78,7 +80,7 @@ class PositionalEncoding(nn.Module):
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-        output = x + self.pe[:, :S, :]
+        output = x + self.pe[:, :S, :]#.to(torch.device("cuda:0" if torch.cuda.is_available() == True else "cpu"))
         output = self.dropout(output)
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -128,6 +130,7 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(embed_dim, embed_dim)
         
         self.attn_drop = nn.Dropout(dropout)
+        # self.attn_map = None
 
         self.n_head = num_heads
         self.emd_dim = embed_dim
@@ -183,17 +186,21 @@ class MultiHeadAttention(nn.Module):
         if attn_mask is not None:
             att = att.masked_fill(attn_mask == 0, float('-inf'))
 
-        att = F.softmax(att, dim = -1) 
+        attn = att
+        att = F.softmax(att, dim = -1)
         att = self.attn_drop(att) 
+        # attn = att
         y = att @ v
 
         y = y.transpose(1, 2).contiguous().view(N, S, E)
         output = self.proj(y)
 
+
+
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
-        return output
+        return output, attn
 
 
